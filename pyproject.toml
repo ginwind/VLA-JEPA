@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "starVLA"
+authors = [
+    {name = "Jinhui Ye", email="jinhuiyes@gmail.com"},
+    {name = "Fangjing Wang", email="fangjing_wang@outlook.com"},
+    {name = "Junqiu Yu", email="michaelyu1101@163.com"},
+
+]
+description = "StarVLA: A Lego-like Codebase for Vision-Language-Action Model Developing ."
+version = "1.0.1"
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = ["vision-language-actions models", " robotic manipulation", "multimodal pretraining", "robot learning", "generative models"]
+license = {file = "LICENSE"}
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+"Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+]
+
+[project.optional-dependencies]
+dev = [
+    "black>=24.2.0",
+    "gpustat",
+    "ipython",
+    "pre-commit",
+    "ruff>=0.2.2",
+]
+sagemaker = [
+    "boto3",
+    "sagemaker"
+]
+
+
+[tool.setuptools.packages.find]
+where = ["."]
+exclude = [
+    "tests",         # test directory
+    "cache",         # cache directory
+    "playground",
+    "results",       # result directory
+    "checkpoints",   # model checkpoint
+    "scripts",       # script directory
+    "eval",          # evaluation related directory
+    ".vscode",       # VS Code configuration directory
+    "*.egg-info",    # egg-info metadata directory
+    "**.log",         # log file
+    "*.tmp",         # temporary file
+    "*.bak",         # backup file
+    "**__pycache__**",   # Python cache directory
+    "*.pyc",         # compiled Python file
+    "*.pyo",          # optimized Python file
+    "**bar**",
+    "starVLA/config",
+
+]
+
+[tool.setuptools.package-data]
+"cogact" = ["py.typed"]
+
+[tool.black]
+line-length = 121
+target-version = ["py310"]
+preview = true
+
+[tool.ruff]
+line-length = 121
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["A", "B", "E", "F", "I", "RUF", "W"]
+ignore = ["F722"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["E402", "F401"]
