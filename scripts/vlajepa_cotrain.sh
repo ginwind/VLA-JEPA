@@ -13,7 +13,7 @@ export OMP_NUM_THREADS=1
 export WANDB_MODE=disabled
 
 accelerate launch \
-  --config_file /home/dataset-local/ginwind/VLA-JEPA/starVLA/config/deepseeds/deepspeed_zero2.yaml \
+  --config_file ./starVLA/config/deepseeds/deepspeed_zero2.yaml \
   --num_processes 8 \
-  /home/dataset-local/ginwind/VLA-JEPA/starVLA/training/train_vlajepa_cotrain.py \
-  --config_yaml /home/dataset-local/ginwind/VLA-JEPA/scripts/config/vlajepa_cotrain.yaml
+  ./starVLA/training/train_vlajepa_cotrain.py \
+  --config_yaml ./scripts/config/vlajepa_cotrain.yaml

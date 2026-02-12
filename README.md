@@ -1,6 +1,26 @@
-<div align="center">
-VLA-JEPA: Enhancing Vision-Language-Action Model with Latent World Model
-</div>
+<h3 align="center" style="font-size:48px; font-weight:bold; color:#9C276A; margin: 0;">
+  <a href="https://arxiv.org/abs/2507.04447" style="color:#9C276A; text-decoration: none;">
+    VLA-JEPA: Enhancing Vision-Language-Action Model with Latent World Model
+  </a>
+</h3>
+<p align="center">
+  ⭐ If our project helps you, please give us a star on GitHub to support us!
+</p>
+
+<p>
+  <a href="https://arxiv.org/abs/2602.10098">
+    <img src="https://img.shields.io/badge/Paper-PDF-orange.svg" alt="Paper PDF">
+  </a>
+  <a href="https://ginwind.github.io/VLA-JEPA/">
+    <img src="https://img.shields.io/badge/Project-Page-Green.svg" alt="Project Page">
+  </a>
+  <a href="https://huggingface.co/ginwind/VLA-JEPA">
+    <img src="https://img.shields.io/badge/🤗-Hugging_Face-yellow.svg" alt="Hugging Face">
+  </a>
+  <a href="https://github.com/tatsu-lab/stanford_alpaca/blob/main/LICENSE">
+    <img src="https://img.shields.io/badge/Code%20License-Apache_2.0-green.svg" alt="Code License">
+  </a>
+</p>
 
 ## TODO
 - [✅] Release the training code
