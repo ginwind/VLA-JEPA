@@ -29,6 +29,7 @@
 - [✅] Release the evaluation code for LIBERO
 - [❌] Release the evaluation code for LIBERO-Plus
 - [❌] Release the evaluation code for SimplerEnv
+- [❌] Release the training code for custom data
 
 ## Environment Setup
 
