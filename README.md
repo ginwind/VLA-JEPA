@@ -25,11 +25,11 @@
 </div>
 
 ## TODO
-- [✅] Release the training code
-- [✅] Release the evaluation code for LIBERO
-- [❌] Release the evaluation code for LIBERO-Plus
-- [❌] Release the evaluation code for SimplerEnv
-- [❌] Release the training code for custom data
+- [x] Partial training code
+- [x] LIBERO evaluation code
+- [ ] LIBERO-Plus evaluation code
+- [ ] SimplerEnv evaluation code
+- [ ] Training utilities and examples for custom datasets
 
 ## Environment Setup
 
