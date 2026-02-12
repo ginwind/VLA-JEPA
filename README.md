@@ -94,7 +94,7 @@ pip install numpy==1.24.4
   - `framework.qwenvl.basevlm`: path to the Qwen3-VL-2B checkpoint
   - `framework.vj2_model.base_encoder`: path to the V-JEPA encoder checkpoint
 
-- **Evaluation script:** Edit [`examples/LIBERO/eval_libero.sh`](./examples/LIBERO/eval_libero.sh) and set the `LIBERO_HOME` environment variable (line 4) to your local LIBERO installation path, and set the `sim_python` variable (line 9) to the Python executable of the LIBERO conda environment. Finally, set the `your_ckpt` variable (line 11) to the path of the downloaded `LIBERO/checkpoints/VLA-JEPA-LIBERO.pt`.
+- **Evaluation script:** Edit [`examples/LIBERO/eval_libero.sh`](./examples/LIBERO/eval_libero.sh) and set the `LIBERO_HOME` environment variable (line 4) to your local LIBERO code path, and set the `sim_python` variable (line 9) to the Python executable of the LIBERO conda environment. Finally, set the `your_ckpt` variable (line 11) to the path of the downloaded `LIBERO/checkpoints/VLA-JEPA-LIBERO.pt`.
 
 - **Run evaluation:** Launch the evaluation (the script runs the four task suites in parallel across 4 GPUs):
 ```bash
