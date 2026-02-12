@@ -3,9 +3,6 @@
     VLA-JEPA: Enhancing Vision-Language-Action Model with Latent World Model
   </a>
 </h3>
-<p align="center">
-  ⭐ If our project helps you, please give us a star on GitHub to support us!
-</p>
 
 <div align="center">
 <p>
@@ -22,6 +19,10 @@
     <img src="https://img.shields.io/badge/Code%20License-Apache_2.0-green.svg" alt="Code License">
   </a>
 </p>
+<p align="center">
+  ⭐ If our project helps you, please give us a star on GitHub to support us!
+</p>
+</div>
 
 ## TODO
 - [✅] Release the training code
