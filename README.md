@@ -26,7 +26,7 @@
 
 ## TODO
 - [✅] Release the training code
-- [❌] Release the evaluation code for LIBERO
+- [✅] Release the evaluation code for LIBERO
 - [❌] Release the evaluation code for LIBERO-Plus
 - [❌] Release the evaluation code for SimplerEnv
 
@@ -74,6 +74,34 @@ Ensure the following configurations are updated in the YAML file:
 - Update `datasets.vla_data.data_root_dir`, `datasets.video_data.video_dir`, and `datasets.video_data.text_file` to match the paths of your datasets.
 
 Once the configurations are updated, you can proceed to start the training process.
+
+## Evaluation
+
+Download the model checkpoints from Hugging Face: https://huggingface.co/ginwind/VLA-JEPA
+
+### LIBERO
+
+- **Environment:** Install the required Python packages into your `VLA-JEPA` environment:
+```bash
+pip install tyro matplotlib mediapy websockets msgpack
+pip install numpy==1.24.4
+```
+
+- **LIBERO setup:** Prepare the LIBERO benchmark in a separate conda environment following the official LIBERO instructions: https://github.com/Lifelong-Robot-Learning/LIBERO
+
+- **Configuration:** In the downloaded checkpoint folder, update `config.json` and `config.yaml` to point the following fields to your local checkpoints:
+  - `framework.qwenvl.basevlm`: path to the Qwen3-VL-2B checkpoint
+  - `framework.vj2_model.base_encoder`: path to the V-JEPA encoder checkpoint
+
+- **Evaluation script:** Edit `examples/LIBERO/eval_libero.sh` and set the `LIBERO_HOME` environment variable (line 4) to your local LIBERO installation path, and set the `sim_python` variable (line 9) to the Python executable of the LIBERO conda environment. Finally, set the `your_ckpt` variable (line 11) to the path of the downloaded `LIBERO/checkpoints/VLA-JEPA-LIBERO.pt`.
+
+- **Run evaluation:** Launch the evaluation (the script runs the four task suites in parallel across 4 GPUs):
+```bash
+bash ./examples/LIBERO/eval_libero.sh
+```
+
+- **Notes:** Ensure each process has access to a GPU and verify that all checkpoint paths in the configuration files are correct before running the evaluation.
+
 
 ## Acknowledgement
 
