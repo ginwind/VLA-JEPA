@@ -29,7 +29,7 @@
 - [x] LIBERO evaluation code
 - [ ] LIBERO-Plus evaluation code
 - [ ] SimplerEnv evaluation code
-- [ ] Training utilities and examples for custom datasets
+- [ ] Training codes for custom datasets
 
 ## Environment Setup
 
