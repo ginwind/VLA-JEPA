@@ -1,5 +1,5 @@
 <h3 align="center" style="font-size:48px; font-weight:bold; color:#9C276A; margin: 0;">
-  <a href="https://arxiv.org/abs/2507.04447" style="color:#9C276A; text-decoration: none;">
+  <a href="https://arxiv.org/abs/2602.10098" style="color:#9C276A; text-decoration: none;">
     VLA-JEPA: Enhancing Vision-Language-Action Model with Latent World Model
   </a>
 </h3>
