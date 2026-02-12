@@ -7,6 +7,7 @@
   ⭐ If our project helps you, please give us a star on GitHub to support us!
 </p>
 
+<div align="center">
 <p>
   <a href="https://arxiv.org/abs/2602.10098">
     <img src="https://img.shields.io/badge/Paper-PDF-orange.svg" alt="Paper PDF">
