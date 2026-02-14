@@ -106,4 +106,4 @@ bash ./examples/LIBERO/eval_libero.sh
 
 ## Acknowledgement
 
-We extend our sincere gratitude to the [starVLA](https://scholar.google.com/citations?user=leXXHKwAAAAJ&hl=zh-CN) project and the [V-JEPA2](https://github.com/facebookresearch/vjepa2) project for their invaluable open-source contributions.
+We extend our sincere gratitude to the [starVLA](https://github.com/starVLA/starVLA) project and the [V-JEPA2](https://github.com/facebookresearch/vjepa2) project for their invaluable open-source contributions.
