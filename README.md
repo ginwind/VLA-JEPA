@@ -112,7 +112,7 @@ bash ./examples/LIBERO/eval_libero.sh
 
 - **Evaluation script:** Edit [`examples/LIBERO-Plus/eval_libero_plus.sh`](./examples/LIBERO-Plus/eval_libero_plus.sh) and set the `LIBERO_HOME` environment variable (line 4) to your local LIBERO-Plus code path, and set the `sim_python` variable (line 9) to the Python executable of the LIBERO-Plus conda environment. Finally, set the `your_ckpt` variable (line 11) to the path of the downloaded `LIBERO/checkpoints/VLA-JEPA-LIBERO.pt`.
 
-- **Run evaluation:** Launch the evaluation (the script runs the seven pertubation dimension in parallel across 7 GPUs):
+- **Run evaluation:** Launch the evaluation (the script runs the seven pertubation dimensions in parallel across 7 GPUs):
 ```bash
 bash ./examples/LIBERO-Plus/eval_libero_plus.sh
 ```
