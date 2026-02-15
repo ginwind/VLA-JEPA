@@ -104,7 +104,7 @@ bash ./examples/LIBERO/eval_libero.sh
 ### LIBERO-Plus
 
 
-- **LIBERO-Plus setup:** Clone the LIBERO-Plus repository: https://github.com/sylvestf/LIBERO-plus. In `./examples/LIBERO-Plus/libero_plus_init.py`, update line 121 to point to your `LIBERO-Plus/libero/libero/benchmark/task_classification.json`. Replace the original `LIBERO-Plus/libero/libero/benchmark/__init__.py` with the provided modified implementation (see `./examples/LIBERO-Plus/libero_plus_init.py`) to enable evaluation over perturbation dimensions. Finally, follow the official LIBERO-Plus installation instructions and build the benchmark in a separate conda environment.
+- **LIBERO-Plus setup:** Clone the LIBERO-Plus repository: https://github.com/sylvestf/LIBERO-plus. In `./examples/LIBERO-Plus/libero_plus_init.py` of VLA-JEPA repository, update line 121 to point to your `LIBERO-Plus/libero/libero/benchmark/task_classification.json`. Replace the original `LIBERO-Plus/libero/libero/benchmark/__init__.py` with the provided modified implementation (see `./examples/LIBERO-Plus/libero_plus_init.py`) to enable evaluation over perturbation dimensions. Finally, follow the official LIBERO-Plus installation instructions and build the benchmark in a separate conda environment.
 
 - **Configuration:** In the downloaded checkpoint folder, update `config.json` and `config.yaml` to point the following fields to your local checkpoints:
   - `framework.qwenvl.basevlm`: path to the Qwen3-VL-2B checkpoint
