@@ -100,23 +100,23 @@ for libero_suite in libero_suites:
 
 def get_ids_by_category(category_value):
     """
-    根据category值获取所有suite中匹配的id列表
-    
-    参数:
-        category_value (str): category的值，如 "Background Textures"
-        Background Textures
-        Camera Viewpoints
-        Language Instructions
-        Light Conditions
-        Objects Layout
-        Robot Initial States
-        Sensor Noise
-    
-    返回:
-        dict: 格式为 {suite_name: [id1, id2, ...]} 的字典
+    Retrieve the list of matching IDs from all suites based on the given category value.
+
+    Args:
+        category_value (str): The category value to query, e.g., "Background Textures".
+        Valid category values include:
+            - Background Textures
+            - Camera Viewpoints
+            - Language Instructions
+            - Light Conditions
+            - Objects Layout
+            - Robot Initial States
+            - Sensor Noise
+
+    Returns:
+        dict: A dictionary in the format {suite_name: [id1, id2, ...]}.
     """
     import json
-    
     # read json classification file
     with open('/home/dataset-assist-0/algorithm/ginwind/LIBERO-plus/libero/libero/benchmark/task_classification.json', 'r', encoding='utf-8') as f:
         data = json.load(f)
