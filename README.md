@@ -80,7 +80,7 @@ Once the configurations are updated, you can proceed to start the training proce
 
 Download the model checkpoints from Hugging Face: https://huggingface.co/ginwind/VLA-JEPA
 
-**Environment:** Then install the required Python packages into your `VLA-JEPA` environment:
+**Environment:** Install the required Python packages into your `VLA-JEPA` environment:
 ```bash
 pip install tyro matplotlib mediapy websockets msgpack
 pip install numpy==1.24.4
