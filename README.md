@@ -27,7 +27,7 @@
 ## TODO
 - [x] Partial training code
 - [x] LIBERO evaluation code
-- [ ] LIBERO-Plus evaluation code
+- [x] LIBERO-Plus evaluation code
 - [ ] SimplerEnv evaluation code
 - [ ] Training codes for custom datasets
 
@@ -80,13 +80,13 @@ Once the configurations are updated, you can proceed to start the training proce
 
 Download the model checkpoints from Hugging Face: https://huggingface.co/ginwind/VLA-JEPA
 
-### LIBERO
-
-- **Environment:** Install the required Python packages into your `VLA-JEPA` environment:
+**Environment:** Then install the required Python packages into your `VLA-JEPA` environment:
 ```bash
 pip install tyro matplotlib mediapy websockets msgpack
 pip install numpy==1.24.4
 ```
+
+### LIBERO
 
 - **LIBERO setup:** Prepare the LIBERO benchmark in a separate conda environment following the official LIBERO instructions: https://github.com/Lifelong-Robot-Learning/LIBERO
 
@@ -101,7 +101,25 @@ pip install numpy==1.24.4
 bash ./examples/LIBERO/eval_libero.sh
 ```
 
-- **Notes:** Ensure each process has access to a GPU and verify that all checkpoint paths in the configuration files are correct before running the evaluation.
+### LIBERO-Plus
+
+
+- **LIBERO-Plus setup:** Clone the LIBERO-Plus repository: https://github.com/sylvestf/LIBERO-plus. In `./examples/LIBERO-Plus/libero_plus_init.py`, update line 121 to point to your `LIBERO-Plus/libero/libero/benchmark/task_classification.json`. Replace the original `LIBERO-Plus/libero/libero/benchmark/__init__.py` with the provided modified implementation (see `./examples/LIBERO-Plus/libero_plus_init.py`) to enable evaluation over perturbation dimensions. Finally, follow the official LIBERO-Plus installation instructions and build the benchmark in a separate conda environment.
+
+- **Configuration:** In the downloaded checkpoint folder, update `config.json` and `config.yaml` to point the following fields to your local checkpoints:
+  - `framework.qwenvl.basevlm`: path to the Qwen3-VL-2B checkpoint
+  - `framework.vj2_model.base_encoder`: path to the V-JEPA encoder checkpoint
+
+- **Evaluation script:** Edit [`examples/LIBERO-Plus/eval_libero_plus.sh`](./examples/LIBERO-Plus/eval_libero_plus.sh) and set the `LIBERO_HOME` environment variable (line 4) to your local LIBERO-Plus code path, and set the `sim_python` variable (line 9) to the Python executable of the LIBERO-Plus conda environment. Finally, set the `your_ckpt` variable (line 11) to the path of the downloaded `LIBERO/checkpoints/VLA-JEPA-LIBERO.pt`.
+
+- **Run evaluation:** Launch the evaluation (the script runs the seven pertubation dimension in parallel across 7 GPUs):
+```bash
+bash ./examples/LIBERO-Plus/eval_libero_plus.sh
+```
+
+**Notes:** Ensure each process has access to a GPU and verify that all checkpoint paths in the configuration files are correct before running the evaluation.
+
+
 
 
 ## Acknowledgement
