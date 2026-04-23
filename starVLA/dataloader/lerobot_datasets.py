@@ -17,6 +17,7 @@ def make_LeRobotSingleDataset(
     delete_pause_frame: bool = False,
     action_horizon: int = 7,
     video_horizon: int = 16,
+    video_frame_stride: int = 1,
 ) -> LeRobotSingleDataset:
     """
     Make a LeRobotSingleDataset object.
@@ -28,8 +29,9 @@ def make_LeRobotSingleDataset(
     :return: A LeRobotSingleDataset object.
     """
     data_config_cls = ROBOT_TYPE_CONFIG_MAP[robot_type]
+    video_frame_stride = max(int(video_frame_stride), 1)
     data_config = data_config_cls(
-        observation_indices=list(range(video_horizon)),
+        observation_indices=[i * video_frame_stride for i in range(video_horizon)],
         action_indices=list(range(action_horizon))
     )
     modality_config = data_config.modality_config()
@@ -58,6 +60,7 @@ def get_vla_dataset(
     delete_pause_frame: bool = True,
     action_horizon: int = 7,
     video_horizon: int = 16,
+    video_frame_stride: int | None = None,
     **kwargs: dict,
 ) -> LeRobotMixtureDataset:
     """
@@ -65,6 +68,9 @@ def get_vla_dataset(
     """
     data_root_dir = data_cfg.data_root_dir
     data_mix = data_cfg.data_mix
+    if video_frame_stride is None:
+        video_frame_stride = int(data_cfg.get("video_frame_stride", 1))
+    video_frame_stride = max(int(video_frame_stride), 1)
     mixture_spec = DATASET_NAMED_MIXTURES[data_mix]
     included_datasets, filtered_mixture_spec = set(), []
     for d_name, d_weight, robot_type in mixture_spec:  
@@ -83,7 +89,8 @@ def get_vla_dataset(
                                                           robot_type, 
                                                           delete_pause_frame=delete_pause_frame, 
                                                           action_horizon=action_horizon,
-                                                          video_horizon=video_horizon), d_weight))
+                                                          video_horizon=video_horizon,
+                                                          video_frame_stride=video_frame_stride), d_weight))
 
     return LeRobotMixtureDataset(
         dataset_mixture,
@@ -93,6 +100,7 @@ def get_vla_dataset(
         with_state=data_cfg.get("with_state", False),
         resolution_size=data_cfg.get("resolution_size", 224),
         video_resolution_size=data_cfg.get("video_resolution_size", 256),
+        video_target_shift_steps=data_cfg.get("video_target_shift_steps", 0),
         seed=seed,
         **kwargs,
     )
