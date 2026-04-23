@@ -922,6 +922,31 @@ class LeRobotSingleDataset(Dataset):
             video_backend_kwargs=self.video_backend_kwargs,
         )
 
+    def get_video_by_step_indices(
+        self,
+        trajectory_id: int,
+        key: str,
+        step_indices: np.ndarray,
+    ) -> np.ndarray:
+        """Get video frames for arbitrary trajectory step indices."""
+        trajectory_index = self.get_trajectory_index(trajectory_id)
+        step_indices = np.asarray(step_indices, dtype=np.int64)
+        step_indices = np.maximum(step_indices, 0)
+        step_indices = np.minimum(step_indices, self.trajectory_lengths[trajectory_index] - 1)
+        assert key.startswith("video."), f"Video key must start with 'video.', got {key}"
+        key = key.replace("video.", "")
+        video_path = self.get_video_path(trajectory_id, key)
+        assert self.curr_traj_data is not None, f"No data found for {trajectory_id=}"
+        assert "timestamp" in self.curr_traj_data.columns, f"No timestamp found in {trajectory_id=}"
+        timestamp: np.ndarray = self.curr_traj_data["timestamp"].to_numpy()
+        video_timestamp = timestamp[step_indices]
+        return get_frames_by_timestamps(
+            video_path.as_posix(),
+            video_timestamp,
+            video_backend=self.video_backend,
+            video_backend_kwargs=self.video_backend_kwargs,
+        )
+
     def get_state_or_action(
         self,
         trajectory_id: int,
@@ -1262,6 +1287,20 @@ def safe_hash(input_tuple):
     return seed & 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
 
 
+def apply_transforms_for_present_keys(transforms, data: dict) -> dict:
+    """Apply only transforms whose declared inputs are present in the sample."""
+    if transforms is None:
+        return data
+    if isinstance(transforms, ComposedModalityTransform):
+        for transform in transforms.transforms:
+            apply_to = getattr(transform, "apply_to", None)
+            if apply_to and not all(key in data for key in apply_to):
+                continue
+            data = transform(data)
+        return data
+    return transforms(data)
+
+
 class MixtureSpecElement(BaseModel):
     dataset_path: list[Path] | Path = Field(..., description="The path to the dataset.")
     dataset_weight: float = Field(..., description="The weight of the dataset in the mixture.")
@@ -1379,6 +1418,7 @@ class LeRobotMixtureDataset(Dataset):
         with_state: bool = False,
         resolution_size: int = 224,
         video_resolution_size: int = 256,
+        video_target_shift_steps: int = 0,
         seed: int = 42,
         metadata_config: dict = {
             "percentile_mixing_method": "min_max",
@@ -1415,6 +1455,20 @@ class LeRobotMixtureDataset(Dataset):
         self.with_state = with_state
         self.resolution_size = resolution_size
         self.video_resolution_size = video_resolution_size
+        self.video_target_shift_steps = max(int(video_target_shift_steps), 0)
+        if self.video_target_shift_steps > 0:
+            for dataset in self.datasets:
+                unsupported_video_transforms = []
+                transforms = getattr(dataset.transforms, "transforms", [])
+                for transform in transforms:
+                    apply_to = getattr(transform, "apply_to", [])
+                    if any(key in dataset.modality_keys["video"] for key in apply_to):
+                        unsupported_video_transforms.append(type(transform).__name__)
+                if unsupported_video_transforms:
+                    raise ValueError(
+                        "video_target_shift_steps does not currently support datasets with explicit video transforms. "
+                        f"Dataset {dataset.dataset_name} uses {unsupported_video_transforms}."
+                    )
 
         # Set properties for sampling
 
@@ -1590,23 +1644,54 @@ class LeRobotMixtureDataset(Dataset):
         for attempt in range(max_retries):
             try:
                 dataset, trajectory_name, step = self.sample_step(index)
-                data = dataset.transforms(dataset.get_step_data(trajectory_name, step))    # video T = 1, action T = horizon
+                if self.video_target_shift_steps > 0:
+                    dataset.curr_traj_data = dataset.get_trajectory_data(trajectory_name)
+                    data = {}
+                    for modality in ("state", "action", "language"):
+                        for key in dataset.modality_keys.get(modality, []):
+                            data[key] = dataset.get_data_by_modality(trajectory_name, modality, key, step)
+                    data = apply_transforms_for_present_keys(dataset.transforms, data)
+                else:
+                    data = dataset.transforms(dataset.get_step_data(trajectory_name, step))    # video T = 1, action T = horizon
                 
                 # Process all video keys dynamically
-                videos, images = [], []
+                videos, target_videos, images = [], [], []
                 for i, video_key in enumerate(dataset.modality_keys["video"]):
-                    video = data[video_key] # Shape: (T, H, W, C)
+                    if self.video_target_shift_steps > 0:
+                        step_offsets = np.asarray(dataset.delta_indices[video_key], dtype=np.int64)
+                        if step_offsets.size <= self.video_target_shift_steps:
+                            raise ValueError(
+                                "video_target_shift_steps must be smaller than the sampled video horizon "
+                                f"for key {video_key}: horizon={step_offsets.size}, "
+                                f"shift={self.video_target_shift_steps}"
+                            )
+                        context_indices = step + step_offsets[:-self.video_target_shift_steps]
+                        target_indices = step + step_offsets[self.video_target_shift_steps:]
+                        video = dataset.get_video_by_step_indices(trajectory_name, video_key, context_indices)
+                        target_video = dataset.get_video_by_step_indices(trajectory_name, video_key, target_indices)
+                        target_video = self.resize_video_opencv(target_video, self.video_resolution_size)
+                    else:
+                        video = data[video_key] # Shape: (T, H, W, C)
+                        target_video = None
                     video = self.resize_video_opencv(video, self.video_resolution_size)
                     if len(dataset.modality_keys["video"]) > 2:
                         if i in [0, 2]:
                             videos.append(video)
+                            if target_video is not None:
+                                target_videos.append(target_video)
                     else:
                         videos.append(video)
+                        if target_video is not None:
+                            target_videos.append(target_video)
                     primary_image = Image.fromarray(video[0]).resize((self.resolution_size, self.resolution_size))
                     images.append(primary_image)
                 if len(dataset.modality_keys["video"]) == 1:
                     videos = [videos[0], videos[0].copy()]  # Duplicate if only one video
+                    if target_videos:
+                        target_videos = [target_videos[0], target_videos[0].copy()]
                 videos = np.stack(videos, axis=0)  # Shape: (V, T, H, W, C)        
+                if target_videos:
+                    target_videos = np.stack(target_videos, axis=0)
                     
                 # Get language and action data
                 language = data[dataset.modality_keys["language"][0]][0]
@@ -1616,6 +1701,8 @@ class LeRobotMixtureDataset(Dataset):
                 action = np.concatenate(action, axis=1).astype(np.float16)
 
                 return_dict = dict(action=action, image=images, lang=language, video=videos)
+                if isinstance(target_videos, np.ndarray):
+                    return_dict["video_target"] = target_videos
                 if self.with_state:
                     state = []
                     for state_key in dataset.modality_keys["state"]:
@@ -2122,6 +2209,3 @@ class LeRobotMixtureDataset(Dataset):
                 dataset.set_transforms_metadata(self.merged_metadata[dataset.tag])
         
         print(f"Applied cached statistics for {len(self.merged_metadata)} embodiment tags.")
-
-
-
