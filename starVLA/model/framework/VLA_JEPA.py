@@ -82,6 +82,13 @@ class VLA_JEPA(baseframework):
         self.vj_processor = AutoVideoProcessor.from_pretrained(self.config.framework.vj2_model.base_encoder)
 
         tubelet_size = self.vj_encoder.config.tubelet_size
+        self.video_target_shift_steps = int(self.config.datasets.vla_data.get("video_target_shift_steps", 0))
+        if self.video_target_shift_steps not in (0, tubelet_size):
+            raise ValueError(
+                "video_target_shift_steps must be 0 or exactly one encoder tubelet "
+                f"({tubelet_size}) so the JEPA predictor and action prompt stay aligned; "
+                f"got {self.video_target_shift_steps}"
+            )
         self.vj_predictor = VisionTransformerPredictorAC(
             num_frames=self.config.framework.vj2_model.num_frames//tubelet_size,
             img_size=((self.vj_encoder.config.image_size, self.vj_encoder.config.image_size)),
@@ -128,6 +135,20 @@ class VLA_JEPA(baseframework):
         logger.info(f"Model embedding size: {vla_embedding_size} ;tokenizer.vocab_size: {len(tokenizer)}")
         return action_tokens, action_token_ids, embodied_action_token_id
 
+    def _encode_videos(self, batch_videos: np.ndarray) -> torch.Tensor:
+        B, V, T, C, H, W = batch_videos.shape
+        batch_videos = batch_videos.reshape(B * V, T, C, H, W)
+        input_videos = []
+        for i in range(B * V):
+            input_videos.append(self.vj_processor(
+                videos=batch_videos[i], return_tensors="pt"
+            )["pixel_values_videos"].to(self.vj_encoder.device))
+        input_videos = torch.cat(input_videos, dim=0)
+        with torch.no_grad():
+            video_embeddings = self.vj_encoder.get_vision_features(pixel_values_videos=input_videos)
+            video_embeddings = torch.cat(torch.chunk(video_embeddings, chunks=V, dim=0), dim=2)
+        return video_embeddings
+
     def forward(
         self,
         examples: List[dict] = None,
@@ -138,6 +159,7 @@ class VLA_JEPA(baseframework):
         """
         batch_images = [example["image"] for example in examples]  # [B, [PIL.Image]]
         batch_videos = [example["video"] for example in examples]  #  [B, V, T, H, W, 3]
+        batch_target_videos = [example["video_target"] for example in examples] if "video_target" in examples[0] else None
         instructions = [example["lang"] for example in examples]  # [B, str]
         actions = [example["action"]for example in examples] if "action" in examples[0] else None # label [B， len, 7]
         
@@ -174,6 +196,9 @@ class VLA_JEPA(baseframework):
         #[print(each.shape, end=";") for each in batch_videos]
         batch_videos = np.stack(batch_videos)  #  [B, V, T, H, W, 3]
         batch_videos = batch_videos.transpose(0,1,2,5,3,4)  # [B, V, T, 3, H, W]
+        if batch_target_videos is not None:
+            batch_target_videos = np.stack(batch_target_videos)
+            batch_target_videos = batch_target_videos.transpose(0,1,2,5,3,4)
 
         # Step 1: QWenVL input format
         if actions is not None:
@@ -213,23 +238,21 @@ class VLA_JEPA(baseframework):
             #exit()
         
             # Step 2: JEPA Encoder
-            B, V, T, C, H, W = batch_videos.shape
-            batch_videos = batch_videos.reshape(B*V, T, C, H, W)  # [B*V, T, C, H, W]
-            input_videos = []
-            for i in range(B*V):
-                input_videos.append(self.vj_processor(
-                    videos=batch_videos[i], return_tensors="pt"
-                )["pixel_values_videos"].to(self.vj_encoder.device))
-            input_videos = torch.cat(input_videos, dim=0)  # [B*V, T, C, H, W]
-            with torch.no_grad():
-                video_embeddings = self.vj_encoder.get_vision_features(pixel_values_videos=input_videos)
-                video_embeddings = torch.cat(torch.chunk(video_embeddings, chunks=V, dim=0), dim=2)
-            #print(video_embeddings.shape) # [B, T//tubelet_size * dim_per_frame, V*embed_dim]
-        
-            # Step 3: VJ Predictor
-            T = T // self.vj_encoder.config.tubelet_size
-            input_states = video_embeddings[:, :video_embeddings.shape[1] // T * (T-1),:]  # [B, (T-1)*dim_per_frame, V*embed_dim]
-            gt_states = video_embeddings[:, video_embeddings.shape[1] // T:, :]
+            video_embeddings = self._encode_videos(batch_videos)
+            if batch_target_videos is not None:
+                input_states = video_embeddings
+                gt_states = self._encode_videos(batch_target_videos)
+                if input_states.shape != gt_states.shape:
+                    raise ValueError(
+                        "Shifted JEPA context and target clips must produce matching token shapes, "
+                        f"got {input_states.shape} and {gt_states.shape}"
+                    )
+            else:
+                B, V, T, C, H, W = batch_videos.shape
+                # Step 3: VJ Predictor
+                T = T // self.vj_encoder.config.tubelet_size
+                input_states = video_embeddings[:, :video_embeddings.shape[1] // T * (T-1),:]  # [B, (T-1)*dim_per_frame, V*embed_dim]
+                gt_states = video_embeddings[:, video_embeddings.shape[1] // T:, :]
             #print(input_states.shape, action_tokens.shape)
             #exit()
             predicted_states = self.vj_predictor(
