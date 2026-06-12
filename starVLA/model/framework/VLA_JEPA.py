@@ -3,19 +3,18 @@
 # Implemented by [Junqiu YU / Fudan University] in [2025]. 
 # Design and Merged by [Jinhui YE / HKUST University] in [2025].
 """
-Qwen-GR00T Framework
+VLA-JEPA Framework
 A lightweight implementation that Qwen-VL + Flow-matching head to directly predict continuous actions
-Flow-matching header is copyright from GR00T N1.5,
+with a latent world model (V-JEPA2) for future-aware action generation.
+Flow-matching header is copyright from GR00T N1.5.
 """
-from typing import List
-from tqdm import tqdm
 from typing import List, Optional, Tuple
+
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from PIL import Image
-from transformers import AutoVideoProcessor, AutoModel, AutoTokenizer, VJEPA2VideoProcessor
+from transformers import AutoVideoProcessor, AutoModel, AutoTokenizer
 
 from starVLA.training.trainer_utils import initialize_overwatch
 
@@ -67,7 +66,7 @@ class VLA_JEPA(baseframework):
             embodied_action_token=embodied_action_token
         )
 
-        # TODO speical tokens
+        # TODO special tokens
 
         # align dims --> we should put them to config or no?
         self.config.framework.action_model.diffusion_model_cfg.cross_attention_dim = self.qwen_vl_interface.model.config.hidden_size
@@ -143,35 +142,8 @@ class VLA_JEPA(baseframework):
         
         state = [example["state"] for example in examples] if "state" in examples[0] else None  # [B, 1, state_dim]
 
-        """
-        if self.action_model.device == torch.device("cuda:0") and "action" in examples[0]:
-            print(batch_videos[0].shape) #[V, T, H, W, 3]
-            print(instructions[0])
-            print(actions[0].shape) # [T-1, action_dim]
-            print(state[0].shape) if state is not None else print("No state") #[state_dim]
-            print(len(batch_videos), len(instructions), len(actions), len(state) if state is not None else "No state")
-            from diffusers.utils import export_to_video
-            export_to_video(batch_videos[0][0]/255.0, "data_view_0.mp4")
-            export_to_video(batch_videos[0][1]/255.0, "data_view_1.mp4")
-            batch_images[0][0].save("data_image_view_0.png")
-            batch_images[0][1].save("data_image_view_1.png")
-            #print(self.action_tokens)
-            print(self.replace_prompt)
-            print(self.action_token_ids)
-        elif self.action_model.device == torch.device("cuda:0") and "action" not in examples[0]:
-            print(batch_videos[0].shape) #[V, T, H, W, 3]
-            print(instructions[0])
-            print(len(batch_videos), len(instructions))
-            from diffusers.utils import export_to_video
-            export_to_video(batch_videos[0][0]/255.0, "video_view_0.mp4")
-            export_to_video(batch_videos[0][1]/255.0, "video_view_1.mp4")
-            batch_images[0][0].save("video_image_view_0.png")
-        exit()
-        """
-        
-        
 
-        #[print(each.shape, end=";") for each in batch_videos]
+
         batch_videos = np.stack(batch_videos)  #  [B, V, T, H, W, 3]
         batch_videos = batch_videos.transpose(0,1,2,5,3,4)  # [B, V, T, 3, H, W]
 
@@ -192,8 +164,6 @@ class VLA_JEPA(baseframework):
         action_indices = torch.isin(qwen_inputs['input_ids'], torch.tensor(self.action_token_ids, device=qwen_inputs['input_ids'].device))
         action_indices = action_indices.nonzero(as_tuple=True)
 
-        # TODO action condition tokens
-        #embodied_action_indices = torch.isin(qwen_inputs['input_ids'], torch.tensor([self.embodied_action_token_id], device=qwen_inputs['input_ids'].device))
         embodied_action_indices = torch.isin(qwen_inputs['input_ids'], torch.tensor([self.embodied_action_token_id], device=qwen_inputs['input_ids'].device))
         embodied_action_indices = embodied_action_indices.nonzero(as_tuple=True)
         
@@ -209,8 +179,7 @@ class VLA_JEPA(baseframework):
             B, _, H = last_hidden.shape
             action_tokens = last_hidden[action_indices[0], action_indices[1], :].view(B, -1, H)  # [B, action_len, H]
             embodied_action_tokens = last_hidden[embodied_action_indices[0], embodied_action_indices[1], :].view(B, -1, H)  # [B, action_len, H]
-            #print(action_tokens.shape, last_hidden.shape, embodied_action_tokens.shape)
-            #exit()
+
         
             # Step 2: JEPA Encoder
             B, V, T, C, H, W = batch_videos.shape
@@ -224,14 +193,13 @@ class VLA_JEPA(baseframework):
             with torch.no_grad():
                 video_embeddings = self.vj_encoder.get_vision_features(pixel_values_videos=input_videos)
                 video_embeddings = torch.cat(torch.chunk(video_embeddings, chunks=V, dim=0), dim=2)
-            #print(video_embeddings.shape) # [B, T//tubelet_size * dim_per_frame, V*embed_dim]
+
         
             # Step 3: VJ Predictor
             T = T // self.vj_encoder.config.tubelet_size
             input_states = video_embeddings[:, :video_embeddings.shape[1] // T * (T-1),:]  # [B, (T-1)*dim_per_frame, V*embed_dim]
             gt_states = video_embeddings[:, video_embeddings.shape[1] // T:, :]
-            #print(input_states.shape, action_tokens.shape)
-            #exit()
+
             predicted_states = self.vj_predictor(
                 input_states,
                 action_tokens
@@ -265,11 +233,10 @@ class VLA_JEPA(baseframework):
                 state = torch.tensor(
                     np.array(state), device=last_hidden.device, dtype=last_hidden.dtype
                 )
-                #print(state.shape)
+
                 state_repeated = state.repeat(repeated_diffusion_steps, 1, 1)
 
-            #print(embodied_action_repeated.shape, actions_target_repeated.shape, state_repeated.shape) if state_repeated is not None else print("No state for action model")
-            #exit()
+
             action_loss = self.action_model(embodied_action_repeated, actions_target_repeated, state_repeated)  # (B, chunk_len, action_dim)
 
         return {"action_loss": action_loss, "wm_loss": teacher_forcing_wm_loss * 0.1}
@@ -313,7 +280,6 @@ class VLA_JEPA(baseframework):
             prompt_replace_dict={"{actions}":self.replace_prompt, "{e_actions}":self.embodied_replace_prompt})
         
         embodied_action_indices = torch.isin(qwen_inputs['input_ids'], torch.tensor([self.embodied_action_token_id], device=qwen_inputs['input_ids'].device))
-        #embodied_action_indices = ~torch.isin(qwen_inputs['input_ids'], torch.tensor(self.action_token_ids, device=qwen_inputs['input_ids'].device))
         embodied_action_indices = embodied_action_indices.nonzero(as_tuple=True)
 
         with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -340,77 +306,39 @@ class VLA_JEPA(baseframework):
 
 if __name__ == "__main__":
     from omegaconf import OmegaConf
-    import debugpy
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--config_yaml", type=str, default="./starVLA/config/training/starvla_cotrain_oxe.yaml", help="Path to YAML config")
     args, clipargs = parser.parse_known_args()
 
-    debugpy.listen(("0.0.0.0", 10092))
-    print("🔍 Rank 0 waiting for debugger attach on port 10092...")
-    debugpy.wait_for_client()
-
     cfg = OmegaConf.load(args.config_yaml)
-    # try get model
     cfg.framework.qwenvl.base_vlm = "./playground/Pretrained_models/Qwen3-VL-4B-Instruct"
-     
-    model: Qwen_GR00T = Qwen_GR00T(cfg)
+
+    model: VLA_JEPA = VLA_JEPA(cfg)
     print(model)
 
-
-
-    # fake sample 
+    # Fake sample for testing
     image = Image.fromarray(np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8))
-    # Create a sample
     sample = {
-        "action": np.random.uniform(-1, 1, size=(16, 7)).astype(np.float16), # action_chunk, action_dim
-        "image": [image, image], # two views
+        "action": np.random.uniform(-1, 1, size=(16, 7)).astype(np.float16),
+        "image": [image, image],  # two views
         "lang": "This is a fake for testing.",
-        "state" : np.random.uniform(-1, 1, size=(1, 7)).astype(np.float16), # chunk, state_dim
+        "state": np.random.uniform(-1, 1, size=(1, 7)).astype(np.float16),
     }
 
-    batch  = [sample, sample]  # batch size 2
+    batch = [sample, sample]  # batch size 2
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     forward_output = model(batch)
     action_loss = forward_output['action_loss']
     print(f"Action Loss: {action_loss.item()}")
 
-    # test predict action
-    predict_output = model.predict_action(batch_images=[batch[0]["image"]], instructions=[batch[0]["lang"]], state=[batch[0]["state"]])
+    # Test predict action
+    predict_output = model.predict_action(
+        batch_images=[batch[0]["image"]],
+        instructions=[batch[0]["lang"]],
+        state=[batch[0]["state"]],
+    )
     normalized_actions = predict_output['normalized_actions']
-    print(f"Unnormalized Action: {normalized_actions}")
-
-    # # Advance: try forward model with dataloader
-    # # can be fake sample， but here get from dataloader for simpler
-    # from starVLA.dataloader.lerobot_datasets import get_vla_dataset, collate_fn
-
-    # vla_dataset_cfg = cfg.datasets.vla_data
-    # dataset = get_vla_dataset(data_cfg=vla_dataset_cfg)
-
-    # from torch.utils.data import DataLoader
-
-    # train_dataloader = DataLoader(
-    #     dataset,
-    #     batch_size=2,
-    #     num_workers=1,  # For Debug
-    #     collate_fn=collate_fn,
-    # )
-    # # 
-    # for batch in tqdm(train_dataloader, desc="Processing Batches"):
-    #     batch
-    #     break
-
-    # # try get model
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # model = model.to(device)
-    # model(batch)
-
-    # action = model.predict_action(batch_images=[batch[0]["image"]], instructions=[batch[0]["lang"]])
-
-    # # fake state
-    # for ba in batch:
-    #     ba["state"] = ba["action"][0][None]
-
-    # model(batch)
-    # action = model.predict_action(batch_images=[batch[0]["image"]], instructions=[batch[0]["lang"]], state=[batch[0]["state"]])
+    print(f"Predicted Actions: {normalized_actions}")

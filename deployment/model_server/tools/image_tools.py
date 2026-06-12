@@ -1,3 +1,5 @@
+from typing import Any
+
 import numpy as np
 from PIL import Image
 
@@ -8,7 +10,7 @@ def convert_to_uint8(img: np.ndarray) -> np.ndarray:
     This is important for reducing the size of the image when sending it over the network.
     """
     if np.issubdtype(img.dtype, np.floating):
-        img = (255 * img).astype(np.uint8)
+        img = (255 * np.clip(img, 0.0, 1.0) + 0.5).astype(np.uint8)
     return img
 
 
@@ -57,7 +59,7 @@ def _resize_with_pad_pil(image: Image.Image, height: int, width: int, method: in
     assert zero_image.size == (width, height)
     return zero_image
 
-from typing import Sequence, Union, List, Tuple, Any
+
 def to_pil_preserve(images: Any, scale_float: bool = True):
     """
     Convert (possibly nested) numpy image arrays back to PIL.Image WITHOUT changing spatial shape
@@ -79,10 +81,11 @@ def to_pil_preserve(images: Any, scale_float: bool = True):
     Returns:
       Mirrored structure with all leaf nodes as PIL.Image.Image
     """
+
     def _convert(obj):
         # Nested containers
         if isinstance(obj, list):
-            return [ _convert(x) for x in obj ]
+            return [_convert(x) for x in obj]
         if isinstance(obj, tuple):
             return tuple(_convert(x) for x in obj)
 

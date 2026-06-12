@@ -6,27 +6,18 @@ Base framework abstraction providing:
 Note: No device placement or optimizer concerns handled here (delegated to trainer).
 """
 
-import torch.nn as nn
-from typing import List
-
 from pathlib import Path
+from typing import Dict, List
 
 import torch
 import torch.nn as nn
 import numpy as np
-
-from typing import List
-
-from pathlib import Path
-from typing import Dict, List
 from transformers import AutoConfig, AutoModel, PretrainedConfig, PreTrainedModel
-import numpy as np
-from starVLA.model.tools import auto_get_trainable_modules
 
-from starVLA.model.framework.share_tools import read_mode_config
-from starVLA.training.trainer_utils import initialize_overwatch
-from starVLA.model.framework.share_tools import dict_to_namespace
+from starVLA.model.tools import auto_get_trainable_modules
+from starVLA.model.framework.share_tools import read_mode_config, dict_to_namespace
 from starVLA.model.framework.__init__ import build_framework
+from starVLA.training.trainer_utils import initialize_overwatch
 
 logger = initialize_overwatch(__name__)
 
@@ -143,20 +134,6 @@ class baseframework(PreTrainedModel):
         )
         return unnorm_key
 
-    @classmethod
-    def get_action_stats(self, unnorm_key=None):
-        """
-        Retrieve raw action normalization statistics.
-
-        Args:
-            unnorm_key: Optional dataset stats key.
-
-        Returns:
-            dict: Stats structure (e.g. q01, q99, mask).
-        """
-        unnorm_key = self._check_unnorm_key(self.norm_stats, unnorm_key)
-        return self.norm_stats[unnorm_key]["action"]
-
     @property
     def trainable_module_keys(self, max_depth=1) -> List[str]:
         """
@@ -168,7 +145,7 @@ class baseframework(PreTrainedModel):
         Returns:
             List[str]: Module path names considered trainable.
         """
-        keys = auto_get_trainable_modules(self, max_depth=max_depth)  # auto check which modules are trainable
+        keys = auto_get_trainable_modules(self, max_depth=max_depth)
         return keys
 
     @staticmethod
@@ -204,33 +181,18 @@ class baseframework(PreTrainedModel):
 
         return actions
 
-    @staticmethod
-    def _check_unnorm_key(norm_stats, unnorm_key):
-        """
-        Duplicate helper (retained for backward compatibility).
-        See primary _check_unnorm_key above.
-        """
-        if unnorm_key is None:
-            assert len(norm_stats) == 1, (
-                f"Your model was trained on more than one dataset, "
-                f"please pass a `unnorm_key` from the following options to choose the statistics "
-                f"used for un-normalizing actions: {norm_stats.keys()}"
-            )
-            unnorm_key = next(iter(norm_stats.keys()))
-
-        assert unnorm_key in norm_stats, (
-            f"The `unnorm_key` you chose is not in the set of available dataset statistics, "
-            f"please choose from: {norm_stats.keys()}"
-        )
-        return unnorm_key
-
-    @classmethod
     def get_action_stats(self, unnorm_key=None, norm_stats=None):
         """
-        Duplicate stats accessor (retained for backward compatibility).
-        # in future, it will own to policy interface and pack as 
+        Retrieve raw action normalization statistics.
+
+        Args:
+            unnorm_key: Optional dataset stats key.
+            norm_stats: Optional explicit stats dict (defaults to self.norm_stats).
+
+        Returns:
+            dict: Stats structure (e.g. q01, q99, mask).
         """
-        if norm_stats ==None:
+        if norm_stats is None:
             norm_stats = self.norm_stats
         unnorm_key = self._check_unnorm_key(norm_stats, unnorm_key)
         return norm_stats[unnorm_key]["action"]

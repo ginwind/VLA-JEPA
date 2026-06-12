@@ -208,7 +208,7 @@ class VLAMTrainer(TrainerUtils):
     def _save_checkpoint(self):
         """save current training state"""
 
-        if accelerator.is_main_process:
+        if self.accelerator.is_main_process:
 
             checkpoint_path = os.path.join(self.checkpoint_dir, f"steps_{self.completed_steps}")
             # save model state
@@ -222,7 +222,7 @@ class VLAMTrainer(TrainerUtils):
             with open(os.path.join(self.config.output_dir, "summary.jsonl"), "a") as f:
                 f.write(json.dumps(summary_data) + "\n")
             self.accelerator.print(f"✅ Checkpoint saved at {checkpoint_path}")
-        accelerator.wait_for_everyone()
+        self.accelerator.wait_for_everyone()
 
     def _log_metrics(self, metrics):
         """record training metrics"""
@@ -363,7 +363,7 @@ class VLAMTrainer(TrainerUtils):
             self.writer.add_scalar("mae_score", step_metrics["mae_score"], self.completed_steps)
             self.writer.add_scalar("mse_score", step_metrics["mse_score"], self.completed_steps)
         
-        pass
+        
         dist.barrier()  # ensure all processes are synchronized
         return step_metrics
 
@@ -410,30 +410,6 @@ class VLAMTrainer(TrainerUtils):
             # optimizer step
             self.optimizer.step()
             self.lr_scheduler.step()
-
-            """
-            self.optimizer.zero_grad()
-            #dist.barrier()  # @DEBUG
-            #pass
-            #============= Step 2
-            # VLM task forward propagation
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                vlm_output = self.model.forward(batch_vlm)
-                vlm_loss = sum(vlm_output.values())
-
-            self.accelerator.backward(vlm_loss)
-
-            #pass
-
-            #dist.barrier() #@DEBUG
-            # gradient clipping
-            if self.config.trainer.gradient_clipping is not None:
-                self.accelerator.clip_grad_norm_(self.model.parameters(), self.config.trainer.gradient_clipping)
-
-            # optimizer step
-            self.optimizer.step()
-            self.lr_scheduler.step()
-            """
 
         for k, v in output_dict.items():
             log_dict[f"vla_{k}"] = v.item()

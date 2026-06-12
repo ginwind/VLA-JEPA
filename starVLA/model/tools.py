@@ -1,13 +1,16 @@
+import json
+from pathlib import Path
+
+from omegaconf import OmegaConf
+
+from starVLA.training.trainer_utils import initialize_overwatch
+
+overwatch = initialize_overwatch(__name__)
+
+
 def auto_get_module_keys(module, max_depth=0, prefix_list=None, current_depth=0, current_prefix=""):
     """
-    get all submodule keys of a module, support setting recursion depth and prefix list.
-
-    :param module: the module to traverse.
-    :param max_depth: the maximum recursion depth, default is 1.
-    :param prefix_list: only include modules with specified prefix, default is None means no restriction.
-    :param current_depth: the current recursion depth, internal use.
-    :param current_prefix: the current prefix, internal use.
-    :return: the list of module keys.
+    Get submodule keys from a module, with optional depth and prefix filtering.
     """
     if current_depth > max_depth:
         return []
@@ -23,34 +26,26 @@ def auto_get_module_keys(module, max_depth=0, prefix_list=None, current_depth=0,
 
 def is_module_trainable(module):
     """
-    check if a module is trainable: if the module itself has parameters, then all its parameters require_grad must be True;
-    if the module itself has no parameters, then its trainability depends on its submodules.
+    Check whether a module's direct parameters are all trainable.
     """
     params = list(module.parameters(recurse=False))
     if params:
         return all(p.requires_grad for p in params)
-    else:
-        # for container modules with no direct parameters, consider them trainable (the final result depends on their submodules)
-        return True
+
+    # Container modules with no direct parameters are treated as trainable;
+    # submodule checks determine the final result.
+    return True
 
 
 def auto_get_trainable_modules(module, prefix="", max_depth=None):
     """
-    recursively traverse the module, return the list of all trainable module names.
-    if all submodules of a module are trainable, then only return the name of the parent module, no longer recursively output the names of its submodules.
+    Traverse the module and return trainable module names.
 
-    parameters:
-      - module: the module to traverse.
-      - prefix: the name prefix of the current module (internal use).
-      - max_depth: the maximum recursion depth, None means infinite recursion.
-
-    return:
-      a list of module names.
+    If all submodules under a module are trainable, the parent module name is
+    returned instead of every child name.
     """
-    # get all direct submodules of the current module
     children = list(module.named_children())
 
-    # if the maximum depth is reached or there are no submodules, return the current module (if trainable and prefix is not empty)
     if (max_depth is not None and max_depth <= 0) or not children:
         return [prefix] if prefix and is_module_trainable(module) else []
 
@@ -58,39 +53,30 @@ def auto_get_trainable_modules(module, prefix="", max_depth=None):
     all_children_trainable = True
     for name, child in children:
         full_name = f"{prefix}.{name}" if prefix else name
-        # recursively get the trainable keys of the submodules
         keys = auto_get_trainable_modules(child, full_name, None if max_depth is None else max_depth - 1)
         if not keys:
-            # if the submodule does not return any further submodules, check the submodule itself
             if is_module_trainable(child):
                 keys = [full_name]
             else:
                 all_children_trainable = False
-        else:
-            # if the submodule returns multiple names, it means that it cannot be merged
-            if len(keys) > 1:
-                all_children_trainable = False
+        elif len(keys) > 1:
+            all_children_trainable = False
         child_keys.extend(keys)
 
-    # if the current module is trainable and all submodules are trainable, return the name of the current module
     if is_module_trainable(module) and all_children_trainable and child_keys:
         return [prefix] if prefix else child_keys
-    else:
-        return child_keys
+    return child_keys
 
 
 def print_freeze_status(self):
     """
-    for each top-level submodule, if all its parameters are in the same state (all frozen or all trainable), only print the top-level module.
-    if some top-level submodule has mixed parameter states (some frozen, some trainable), list the state of each parameter under the submodule.
+    Print freeze status grouped by top-level module.
     """
     from collections import defaultdict
 
-    # collect the state of parameters under each top-level module
     status_dict = defaultdict(lambda: {"Frozen": 0, "Trainable": 0, "params": []})
     for full_name, param in self.named_parameters():
-        # full_name is like "qwen_vl_interface.model.layer.weight"
-        top_module = full_name.split(".", 1)[0]  # get the top-level module name
+        top_module = full_name.split(".", 1)[0]
         state = "Frozen" if not param.requires_grad else "Trainable"
         status_dict[top_module]["params"].append((full_name, state))
         status_dict[top_module][state] += 1
@@ -101,18 +87,14 @@ def print_freeze_status(self):
         trainable_count = info["Trainable"]
 
         if frozen_count > 0 and trainable_count == 0:
-            # all frozen
             print(f"{top_module:40s}  |  all Frozen ({frozen_count} parameters)")
         elif trainable_count > 0 and frozen_count == 0:
-            # all trainable
             print(f"{top_module:40s}  |  all Trainable ({trainable_count} parameters)")
         else:
-            # mixed state, first print the module name summary, then list the state of each parameter
-            print(f"{top_module:40s}  |  mixed state → Frozen: {frozen_count}, Trainable: {trainable_count}")
+            print(f"{top_module:40s}  |  mixed state -> Frozen: {frozen_count}, Trainable: {trainable_count}")
             for pname, pstate in info["params"]:
                 print(f"    {pname:60s}  |  {pstate}")
     print("=========================\n")
-
 
 
 class Registry:
@@ -121,76 +103,83 @@ class Registry:
         self._registry = {}
 
     def register(self, key: str):
-        """Decorator: register a builder function or class"""
+        """Decorator: register a builder function or class."""
+
         def decorator(framework_class):
-            if key in self._registry:
-                # print(ImportWarning(f"{key} already registered to {self.name}"))
-                pass
             self._registry[key] = framework_class
             return framework_class
+
         return decorator
-    
+
+    def __contains__(self, key):
+        return key in self._registry
+
     def __getitem__(self, key):
         return self._registry[key]
-    
+
     def list(self):
-        """
-        List currently registered keys; if with_values=True (not used here) return mapping {key: value_obj}.
-        Using class name as value is also intuitive, e.g., framework.__name__.
-        """
+        """List currently registered keys and objects."""
         return {k: v for k, v in self._registry.items()}
+
 
 FRAMEWORK_REGISTRY = Registry("frameworks")
 
 
+def _resolve_checkpoint_run_dir(pretrained_checkpoint):
+    checkpoint_pt = Path(pretrained_checkpoint)
+    if not checkpoint_pt.is_file():
+        overwatch.error(f"Pretrained checkpoint `{pretrained_checkpoint}` does not exist.")
+        raise FileNotFoundError(f"Pretrained checkpoint `{pretrained_checkpoint}` does not exist.")
+    if checkpoint_pt.suffix != ".pt":
+        raise ValueError(f"Expected a .pt checkpoint, got `{checkpoint_pt}`.")
+    if len(checkpoint_pt.parents) < 2:
+        raise ValueError(f"Checkpoint path `{checkpoint_pt}` must live under <run_dir>/checkpoints/.")
 
-from starVLA.training.trainer_utils import initialize_overwatch
-import os
-import json
-from pathlib import Path
-from omegaconf import OmegaConf
+    overwatch.info(f"Loading from local checkpoint path `{checkpoint_pt}`")
+    return checkpoint_pt.parents[1]
 
-# Initialize Overwatch =>> Wraps `logging.Logger`
-overwatch = initialize_overwatch(__name__)
+
+def _load_dataset_statistics(run_dir):
+    dataset_statistics_json = run_dir / "dataset_statistics.json"
+    if not dataset_statistics_json.exists():
+        raise FileNotFoundError(f"Missing `dataset_statistics.json` for `{run_dir}`")
+
+    with open(dataset_statistics_json, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def read_model_config(pretrained_checkpoint):
+    """
+    Load config.json and dataset statistics associated with a checkpoint.
+    """
+    run_dir = _resolve_checkpoint_run_dir(pretrained_checkpoint)
+    config_json = run_dir / "config.json"
+    if not config_json.exists():
+        raise FileNotFoundError(f"Missing `config.json` for `{run_dir}`")
+
+    with open(config_json, "r", encoding="utf-8") as f:
+        global_cfg = json.load(f)
+
+    return global_cfg, _load_dataset_statistics(run_dir)
+
 
 def read_mode_config(pretrained_checkpoint):
     """
-    Same as read_model_config (legacy duplicate kept for backward compatibility).
+    Load config.yaml and dataset statistics associated with a checkpoint.
 
-    Args:
-        pretrained_checkpoint: Path to a .pt checkpoint file.
-
-    Returns:
-        tuple:
-            vla_cfg (dict)
-            norm_stats (dict)
+    The misspelled function name is kept for backward compatibility with
+    existing eval scripts.
     """
-    if os.path.isfile(pretrained_checkpoint):
-        overwatch.info(f"Loading from local checkpoint path `{(checkpoint_pt := Path(pretrained_checkpoint))}`")
+    run_dir = _resolve_checkpoint_run_dir(pretrained_checkpoint)
+    config_yaml = run_dir / "config.yaml"
+    if not config_yaml.exists():
+        raise FileNotFoundError(f"Missing `config.yaml` for `{run_dir}`")
 
-        # [Validate] Checkpoint Path should look like `.../<RUN_ID>/checkpoints/<CHECKPOINT_PATH>.pt`
-        assert checkpoint_pt.suffix == ".pt"
-        run_dir = checkpoint_pt.parents[1]
+    try:
+        ocfg = OmegaConf.load(str(config_yaml))
+        global_cfg = OmegaConf.to_container(ocfg, resolve=True)
+    except Exception as e:
+        overwatch.error(f"Failed to load YAML config `{config_yaml}`: {e}")
+        raise
 
-        # Get paths for `config.json`, `dataset_statistics.json` and pretrained checkpoint
-        config_yaml, dataset_statistics_json = run_dir / "config.yaml", run_dir / "dataset_statistics.json"
-        assert config_yaml.exists(), f"Missing `config.yaml` for `{run_dir}`"
-        assert dataset_statistics_json.exists(), f"Missing `dataset_statistics.json` for `{run_dir}`"
-
-        # Otherwise =>> try looking for a match on `model_id_or_path` on the HF Hub (`model_id_or_path`)
-        # Load VLA Config (and corresponding base VLM `ModelConfig`) from `config.json`
-        try:
-            ocfg = OmegaConf.load(str(config_yaml))
-            global_cfg = OmegaConf.to_container(ocfg, resolve=True)
-        except Exception as e:
-            overwatch.error(f"❌ Failed to load YAML config `{config_yaml}`: {e}")
-            raise
-
-        # Load Dataset Statistics for Action Denormalization
-        with open(dataset_statistics_json, "r") as f:
-            norm_stats = json.load(f)
-    else:
-        overwatch.error(f"❌ Pretrained checkpoint `{pretrained_checkpoint}` does not exist.")
-        raise FileNotFoundError(f"Pretrained checkpoint `{pretrained_checkpoint}` does not exist.")
-    return global_cfg, norm_stats
-
+    return global_cfg, _load_dataset_statistics(run_dir)

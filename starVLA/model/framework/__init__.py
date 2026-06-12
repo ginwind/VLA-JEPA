@@ -11,10 +11,10 @@ Each framework module (e.g., M1.py, QwenFast.py) should register itself:
         return InternVLA_M1(config=config)
 """
 
-import pkgutil
 import importlib
-from starVLA.model.tools import FRAMEWORK_REGISTRY
+import pkgutil
 
+from starVLA.model.tools import FRAMEWORK_REGISTRY
 from starVLA.training.trainer_utils import initialize_overwatch
 
 logger = initialize_overwatch(__name__)
@@ -30,7 +30,7 @@ if pkg_path is not None:
         for _, module_name, _ in pkgutil.iter_modules(pkg_path):
             importlib.import_module(f"{__name__}.{module_name}")
     except Exception as e:
-        logger.log(f"Warning: Failed to auto-import framework submodules: {e}")
+        logger.warning(f"Failed to auto-import framework submodules: {e}")
         
 def build_framework(cfg):
     """
@@ -42,7 +42,7 @@ def build_framework(cfg):
         nn.Module: Instantiated framework model.
     """
 
-    if not hasattr(cfg.framework, "name"): 
+    if not hasattr(cfg.framework, "name"):
         cfg.framework.name = cfg.framework.framework_py  # Backward compatibility for legacy config yaml
         
     if cfg.framework.name == "QwenOFT":
@@ -54,10 +54,15 @@ def build_framework(cfg):
 
     # auto detect from registry
     framework_id = cfg.framework.name
-    if framework_id not in FRAMEWORK_REGISTRY._registry:
-        raise NotImplementedError(f"Framework {cfg.framework.name} is not implemented. Plz, python yourframework_py to specify framework module.")
+    if framework_id not in FRAMEWORK_REGISTRY:
+        available = ", ".join(FRAMEWORK_REGISTRY.list()) or "<none>"
+        raise NotImplementedError(
+            f"Framework {cfg.framework.name} is not implemented. "
+            f"Available frameworks: {available}. "
+            "Set cfg.framework.name or cfg.framework.framework_py to a registered framework."
+        )
     
-    MODLE_CLASS = FRAMEWORK_REGISTRY[framework_id]
-    return MODLE_CLASS(cfg)
+    model_class = FRAMEWORK_REGISTRY[framework_id]
+    return model_class(cfg)
 
 __all__ = ["build_framework", "FRAMEWORK_REGISTRY"]

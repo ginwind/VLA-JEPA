@@ -1,16 +1,25 @@
 import json
-import os
-from accelerate.logging import get_logger
 from functools import partial
-import torch
-import numpy as np
-from torch.utils.data import DataLoader
-import numpy as np
-import torch.distributed as dist
 from pathlib import Path
+
+import numpy as np
+import torch
+import torch.distributed as dist
+from accelerate.logging import get_logger
+from torch.utils.data import DataLoader
+
 from starVLA.dataloader.vlm_datasets import make_vlm_dataloader
 
 logger = get_logger(__name__)
+
+
+def _distributed_ready() -> bool:
+    return dist.is_available() and dist.is_initialized()
+
+
+def _is_rank_zero() -> bool:
+    return not _distributed_ready() or dist.get_rank() == 0
+
 
 def save_dataset_statistics(dataset_statistics, run_dir):
     """Saves a `dataset_statistics.json` file."""
@@ -37,7 +46,7 @@ def save_dataset_statistics(dataset_statistics, run_dir):
 
 def build_dataloader(cfg, dataset_py="lerobot_datasets_oxe"): # TODO now here only is get dataset, we need mv dataloader to here
 
-    if dataset_py == "lerobot_datasets":
+    if dataset_py in {"lerobot_datasets", "lerobot_datasets_oxe"}:
         from starVLA.dataloader.lerobot_datasets import get_vla_dataset, collate_fn
         vla_dataset_cfg = cfg.datasets.vla_data
 
@@ -53,8 +62,7 @@ def build_dataloader(cfg, dataset_py="lerobot_datasets_oxe"): # TODO now here on
             num_workers=8,
             # shuffle=True
         )        
-        if dist.get_rank() == 0: 
-            
+        if _is_rank_zero():
             output_dir = Path(cfg.output_dir)
             vla_dataset.save_dataset_statistics(output_dir / "dataset_statistics.json")
         return vla_train_dataloader
@@ -78,7 +86,11 @@ def build_dataloader(cfg, dataset_py="lerobot_datasets_oxe"): # TODO now here on
 
 
 
-        train_sampler = torch.utils.data.distributed.DistributedSampler(vla_dataset, shuffle=True)
+        train_sampler = (
+            torch.utils.data.distributed.DistributedSampler(vla_dataset, shuffle=True)
+            if _distributed_ready()
+            else None
+        )
 
         vla_train_dataloader = DataLoader(
             vla_dataset,
@@ -86,6 +98,7 @@ def build_dataloader(cfg, dataset_py="lerobot_datasets_oxe"): # TODO now here on
             collate_fn=custom_collate_fn,
             num_workers=16,
             sampler=train_sampler,
+            shuffle=train_sampler is None,
         )      
         #if dist.get_rank() == 0: 
         #    for batch in vla_train_dataloader:
@@ -113,7 +126,11 @@ def build_dataloader(cfg, dataset_py="lerobot_datasets_oxe"): # TODO now here on
             n_views=2,
             resolution_size=video_dataset_cfg.resolution_size)
 
-        train_sampler = torch.utils.data.distributed.DistributedSampler(video_dataset, shuffle=True)
+        train_sampler = (
+            torch.utils.data.distributed.DistributedSampler(video_dataset, shuffle=True)
+            if _distributed_ready()
+            else None
+        )
 
         video_train_dataloader = DataLoader(
             video_dataset,
@@ -121,5 +138,8 @@ def build_dataloader(cfg, dataset_py="lerobot_datasets_oxe"): # TODO now here on
             collate_fn=video_collate_fn,
             num_workers=16,
             sampler=train_sampler,
+            shuffle=train_sampler is None,
         )        
         return video_train_dataloader
+
+    raise ValueError(f"Unsupported dataset_py: {dataset_py}")

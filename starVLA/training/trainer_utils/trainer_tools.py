@@ -1,30 +1,49 @@
 """
-metrics.py
+Trainer utility helpers.
 
-Utility classes defining a Metrics container and multiple Trackers to enable model/stage-specific logging to various
-endpoints (e.g., JSONL local logs, Weights & Biases).
+This module contains small helpers for CLI overrides, parameter-group construction,
+distributed-safe printing, model freezing/loading, and a few evaluation utilities.
 """
 
-from typing import Tuple
-import re
 import json
+import os
+import re
+from functools import wraps
+from typing import Tuple
+
 import numpy as np
 import torch
-
+import torch.distributed as dist
 from accelerate.logging import get_logger
+from PIL import Image
+from torchvision.ops import box_iou
 
 logger = get_logger(__name__)
 
 
-# === Define Tracker Interface ===
-#
+def _distributed_ready() -> bool:
+    return dist.is_available() and dist.is_initialized()
 
-# utils/cli_parser.py
+
+def _is_rank_zero() -> bool:
+    return not _distributed_ready() or dist.get_rank() == 0
+
+
+def _barrier_if_distributed() -> None:
+    if _distributed_ready():
+        dist.barrier()
+
+
+def _resolve_module(model, module_path: str):
+    module = model
+    for attr in module_path.split("."):
+        module = getattr(module, attr)
+    return module
 
 
 def normalize_dotlist_args(args):
     """
-    Convert ['--x.y', 'val'] and ['--flag'] → ['x.y=val', 'flag=true']
+    Convert CLI args like ['--x.y', 'val'] and ['--flag'] into OmegaConf dotlist entries.
     """
     normalized = []
     skip = False
@@ -43,26 +62,19 @@ def normalize_dotlist_args(args):
                 skip = True
             else:
                 normalized.append(f"{key}=true")
-        else:
-            pass  # skip orphaned values
+
     return normalized
 
 
 def build_param_lr_groups(model, cfg):
     """
-    build multiple param groups based on cfg.trainer.learning_rate.
-    support specifying different learning rates for different modules, the rest use base.
+    Build optimizer parameter groups from cfg.trainer.learning_rate.
 
-    Args:
-        vla: nn.Module model object
-        cfg: config object, requires cfg.trainer.learning_rate dictionary
-
-    Returns:
-        List[Dict]: param_groups that can be used to build optimizer with torch.optim
+    Supports per-module learning rates and excludes parameters belonging to
+    cfg.trainer.freeze_modules.
     """
-
     lr_cfg = cfg.trainer.learning_rate
-    base_lr = lr_cfg.get("base", 1e-4)  # default base learning rate
+    base_lr = lr_cfg.get("base", 1e-4)
 
     freeze_modules = cfg.trainer.get("freeze_modules", "")
     if not isinstance(freeze_modules, str):
@@ -74,32 +86,27 @@ def build_param_lr_groups(model, cfg):
     param_groups = []
 
     for freeze_path in freeze_patterns:
-        module = model
         try:
-            for attr in freeze_path.split("."):
-                module = getattr(module, attr)
+            module = _resolve_module(model, freeze_path)
             frozen_params.update(id(p) for p in module.parameters())
         except AttributeError:
-            print(f"⚠️ freeze module path does not exist: {freeze_path}")
-            continue
+            logger.warning(f"Freeze module path does not exist: {freeze_path}")
 
     for module_name, lr in lr_cfg.items():
         if module_name == "base":
             continue
-        # try to find the module under vla by module_name (support nested paths)
-        module = model
-        try:
-            for attr in module_name.split("."):
-                module = getattr(module, attr)
-            # filter out frozen parameters
-            params = [p for p in module.parameters() if id(p) not in frozen_params]
-            if params:  # only add param group if there are trainable parameters
-                param_groups.append({"params": params, "lr": lr, "name": module_name})
-                used_params.update(id(p) for p in params)
-        except AttributeError:
-            ReferenceError(f"⚠️ module path `{module_name}` not found in vla")
 
-    # assign base learning rate to the remaining unused parameters (exclude frozen ones)
+        try:
+            module = _resolve_module(model, module_name)
+        except AttributeError:
+            logger.warning(f"Module path `{module_name}` not found in model; skipping custom learning rate.")
+            continue
+
+        params = [p for p in module.parameters() if id(p) not in frozen_params]
+        if params:
+            param_groups.append({"params": params, "lr": lr, "name": module_name})
+            used_params.update(id(p) for p in params)
+
     other_params = [p for p in model.parameters() if id(p) not in used_params and id(p) not in frozen_params]
     if other_params:
         param_groups.append({"params": other_params, "lr": base_lr, "name": "base"})
@@ -107,100 +114,71 @@ def build_param_lr_groups(model, cfg):
     return param_groups
 
 
-import torch.distributed as dist
-
-
 def only_main_process(func):
-    """
-    decorator: only run in main process (rank=0)
-    """
+    """Decorator: only run the wrapped function on rank 0."""
 
+    @wraps(func)
     def wrapper(*args, **kwargs):
-        if dist.is_initialized() and dist.get_rank() != 0:
-            return None  # non-main process does not execute
+        if not _is_rank_zero():
+            return None
         return func(*args, **kwargs)
 
     return wrapper
 
 
-from torchvision.ops import box_iou
-from PIL import Image
-
-
 def resize_images(images, target_size=(224, 224)):
     """
-    recursively resize all images in the nested list.
+    Recursively resize all PIL images in a nested list.
 
-    :param images: nested list of images or single image.
-    :param target_size: target size (width, height) after resizing.
-    :return: resized images list, keeping the original nested structure.
+    Args:
+        images: Nested list of PIL images or a single PIL image.
+        target_size: Target size as (width, height).
+
+    Returns:
+        Resized images with the original nesting structure preserved.
     """
-    if isinstance(images, Image.Image):  # if it is a single PIL image
+    if isinstance(images, Image.Image):
         return images.resize(target_size)
-    elif isinstance(images, list):  # if it is a list, recursively process each element
+    if isinstance(images, list):
         return [resize_images(img, target_size) for img in images]
-    else:
-        raise ValueError("Unsupported image type or structure.")
-
-
-import torch.distributed as dist
+    raise ValueError("Unsupported image type or structure.")
 
 
 class TrainerUtils:
     @staticmethod
     def freeze_backbones(model, freeze_modules=""):
         """
-        directly freeze the specified submodules based on the relative module path list (patterns), no longer recursively find all submodule names:
-          - patterns: read from config.trainer.freeze_modules, separated by commas to get the "relative path" list
-            for example "qwen_vl_interface, action_model.net",
-            it means to freeze model.qwen_vl_interface and model.action_model.net.
-
-        Args:
-            model: nn.Module model object
-            freeze_modules: relative module path list (patterns)
-
-        Returns:
-            model: nn.Module model object
-        return:
-          - model:
+        Freeze submodules from a comma-separated relative module path list.
         """
         frozen = []
-        print("#"*30)
-        print(freeze_modules)
-        if freeze_modules and type(freeze_modules) == str:
-            # split and remove whitespace
-            patterns = [p.strip() for p in freeze_modules.split(",") if p.strip()] if freeze_modules else []
+        if freeze_modules and isinstance(freeze_modules, str):
+            patterns = [p.strip() for p in freeze_modules.split(",") if p.strip()]
 
             for path in patterns:
-                # split the "relative path" by dots, for example "action_model.net" → ["action_model", "net"]
-                attrs = path.split(".")
-                module = model
                 try:
-                    for attr in attrs:
-                        module = getattr(module, attr)
-                    # if the module is successfully get, freeze it and its all submodule parameters
-                    for param in module.parameters():
-                        param.requires_grad = False
-                    frozen.append(path)
+                    module = _resolve_module(model, path)
                 except AttributeError:
-                    # if the attribute does not exist, skip and print warning
-                    print(f"⚠️ module path does not exist, cannot freeze: {path}")
+                    logger.warning(f"Module path does not exist, cannot freeze: {path}")
                     continue
 
-        dist.barrier()  # synchronize when distributed training
-        if dist.get_rank == 0:
-            print(f"🔒 Frozen modules with re pattern: {frozen}")
+                for param in module.parameters():
+                    param.requires_grad = False
+                frozen.append(path)
+
+        _barrier_if_distributed()
+        if _is_rank_zero():
+            print(f"Frozen modules: {frozen}")
         return model
 
     @staticmethod
     def print_trainable_parameters(model):
         """
-        print the total number of parameters and trainable parameters of the model
-        :param model: PyTorch model instance
+        Print the total and trainable parameter counts for the model.
         """
-        if dist.get_rank() != 0:
-            return
-        print("📊 model parameter statistics:")
+        if not _is_rank_zero():
+            return None
+
+        print("model parameter statistics:")
         num_params = sum(p.numel() for p in model.parameters())
         num_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(
@@ -211,58 +189,50 @@ class TrainerUtils:
     @staticmethod
     def load_pretrained_backbones(model, checkpoint_path=None, reload_modules=None):
         """
-        load checkpoint:
-        - if reload_modules is set, load by path part
-        - otherwise → load the entire model parameters (overwrite model)
-
-        return:
-            replace, loaded_modules: list of module paths that successfully loaded parameters; if global load, then ["<full_model>"]
+        Load a checkpoint into the full model or selected submodules.
         """
         if not checkpoint_path:
-            return []
-        if dist.get_rank() == 0:
-            print(f"📦 loading checkpoint: {checkpoint_path}")
+            return model
+
+        if _is_rank_zero():
+            print(f"Loading checkpoint: {checkpoint_path}")
+
         try:
             checkpoint = torch.load(checkpoint_path, map_location="cpu")
         except Exception as e:
-            raise RuntimeError(f"❌ loading checkpoint failed: {e}")
+            raise RuntimeError(f"Loading checkpoint failed: {e}") from e
 
-        loaded_modules = []
-
-        if reload_modules:  # partial load
+        if reload_modules:
             module_paths = [p.strip() for p in reload_modules.split(",") if p.strip()]
             for path in module_paths:
-                reload_modules = path.split(".")
-                module = model
                 try:
-                    for module_name in reload_modules:  # find the module to modify level by level
-                        module = getattr(module, module_name)
-                    prefix = path + "."
-                    sub_state_dict = {k[len(prefix) :]: v for k, v in checkpoint.items() if k.startswith(prefix)}
-                    if sub_state_dict:
-                        module.load_state_dict(sub_state_dict, strict=True)
-                        if dist.get_rank() == 0:
-                            print(f"✅ parameters loaded to module '{path}'")
-                        loaded_modules.append(path)
-                    else:
-                        print(f"⚠️ parameters not found in checkpoint '{path}'")
+                    module = _resolve_module(model, path)
                 except AttributeError:
-                    print(f"❌ cannot find module path: {path}")
-        else:  # full load
+                    logger.warning(f"Cannot find module path: {path}")
+                    continue
+
+                prefix = path + "."
+                sub_state_dict = {k[len(prefix) :]: v for k, v in checkpoint.items() if k.startswith(prefix)}
+                if sub_state_dict:
+                    module.load_state_dict(sub_state_dict, strict=True)
+                    if _is_rank_zero():
+                        print(f"Parameters loaded to module '{path}'")
+                else:
+                    logger.warning(f"Parameters not found in checkpoint for module '{path}'")
+        else:
             try:
                 model.load_state_dict(checkpoint, strict=True)
-                if dist.get_rank() == 0:
-                    print("✅ loaded <full_model> model parameters")
-                loaded_modules = ["<full_model>"]
+                if _is_rank_zero():
+                    print("Loaded <full_model> model parameters")
             except Exception as e:
-                raise RuntimeError(f"❌ loading full model failed: {e}")
+                raise RuntimeError(f"Loading full model failed: {e}") from e
+
         return model
 
     @staticmethod
     def print_freeze_status(model):
         """
-        print the freezing status of each parameter in the model
-        :param model: PyTorch model instance
+        Print the freezing status of each parameter in the model.
         """
         for name, param in model.named_parameters():
             status = "Frozen" if not param.requires_grad else "Trainable"
@@ -271,15 +241,9 @@ class TrainerUtils:
     @staticmethod
     def setup_distributed_training(accelerator, *components):
         """
-        use Accelerator to prepare distributed training components
-        :param accelerator: Accelerate instance
-        :param components: any number of components (such as model, optimizer, dataloader, etc.)
-        :return: prepared distributed components (in the same order as input)
+        Use Accelerator to prepare distributed training components.
         """
-
-        # use accelerator.prepare method to wrap components
-        prepared_components = accelerator.prepare(*components)
-        return prepared_components
+        return accelerator.prepare(*components)
 
     @staticmethod
     def euclidean_distance(predicted: np.ndarray, ground_truth: np.ndarray) -> float:
@@ -287,51 +251,30 @@ class TrainerUtils:
 
     @staticmethod
     def _reset_dataloader(dataloader, epoch_counter):
-        """safe reset dataloader iterator"""
-        # 1. update epoch counter
+        """Safely reset a dataloader iterator."""
         epoch_counter += 1
 
-        # 2. set new epoch (distributed core)
         if hasattr(dataloader, "sampler") and callable(getattr(dataloader.sampler, "set_epoch", None)):
             dataloader.sampler.set_epoch(epoch_counter)
 
-        # 3. create new iterator
         return iter(dataloader), epoch_counter
 
     @staticmethod
     def compute_grad_angle_with_stats(grads_a: list[torch.Tensor], grads_v: list[torch.Tensor]) -> Tuple[float, float]:
         """
-        compute the cosine angle between two groups of gradient vectors (degrees), and calculate the average angle and variance.
-        grads_a, grads_v: gradient Tensor list corresponding to the same parameter list interface_params
-        return:
-            mean_angle_deg: average angle (degrees)
-            angle_variance: angle variance
+        Compute cosine angles between two groups of gradient vectors.
         """
         angle_degs = []
 
-        # compute the cosine angle between each gradient block grads_a[0].shape = 1280, 3, 14, 14
-        # grads_1 = grads_a[0][0]  # [3, 14, 14]
-        # grads_2 = grads_v[0][0]
-        # grads_a = grads_1.view(-1, 3)  # reshape to [196, 3]
-        # grads_v = grads_2.view(-1, 3)
-
-        # lang linear
-        # reshape to 14*14, 3
-        # layer
-        grads_action = grads_a[0]  # [2048, 11008]
-        grads_action = grads_action[
-            :32, :7
-        ]  # only take the first 7 elements, avoid cosim failure in high-dimensional space
-        grads_vl = grads_v[0]  # [2048, 11008]
-        grads_vl = grads_vl[
-            :32, :7
-        ]  # only take the first 32 elements, 7 dimensions, avoid cosim failure in high-dimensional space
+        grads_action = grads_a[0]
+        grads_action = grads_action[:32, :7]
+        grads_vl = grads_v[0]
+        grads_vl = grads_vl[:32, :7]
         for g_a, g_v in zip(grads_action, grads_vl):
             dot = torch.sum(g_a * g_v)
             norm_a_sq = torch.sum(g_a * g_a)
             norm_v_sq = torch.sum(g_v * g_v)
 
-            # avoid division by zero
             norm_a = torch.sqrt(norm_a_sq + 1e-16)
             norm_v = torch.sqrt(norm_v_sq + 1e-16)
 
@@ -341,22 +284,16 @@ class TrainerUtils:
 
             angle_degs.append(angle_deg.item())
 
-        # compute the average angle and variance
         angle_degs_tensor = torch.tensor(angle_degs)
         mean_angle_deg = torch.mean(angle_degs_tensor).item()
         angle_variance = torch.sqrt(torch.var(angle_degs_tensor)).item()
-        # dist.barrier()
         return mean_angle_deg, angle_variance
 
     @staticmethod
     def pcgrad_project(grads_a: list[torch.Tensor], grads_v: list[torch.Tensor]) -> list[torch.Tensor]:
         """
-        apply PCGrad projection to the second group of gradients grads_v, suppress negative transfer between grads_a and grads_v
-        if the dot product of two groups of gradients < 0, then:
-            grads_v <- grads_v - (dot / ||grads_a||^2) * grads_a
-        return the new grads_v list
+        Apply PCGrad projection to grads_v when gradients conflict with grads_a.
         """
-        # first compute dot and ||grads_a||^2
         dot, norm_a_sq = 0.0, 0.0
         for g_a, g_v in zip(grads_a, grads_v):
             dot += torch.sum(g_a * g_v)
@@ -364,7 +301,6 @@ class TrainerUtils:
 
         if dot < 0:
             coeff = dot / (norm_a_sq + 1e-6)
-            # projection
             grads_v = [g_v - coeff * g_a for g_a, g_v in zip(grads_a, grads_v)]
 
         return grads_v
@@ -372,15 +308,7 @@ class TrainerUtils:
     @staticmethod
     def eval_qwenpi(qwenpi, dataloader, num_batches=20):
         """
-        evaluate QwenQFormerDiT model, compute IoU and action distance.
-
-        Args:
-            qwenpi: QwenQFormerDiT model instance.
-            dataloader: data loader.
-            num_batches: number of batches to evaluate.
-
-        Returns:
-            dict: contains IoU and action distance evaluation results.
+        Evaluate QwenQFormerDiT model, computing IoU and action distance.
         """
         iou_scores = []
         action_distances = []
@@ -394,24 +322,20 @@ class TrainerUtils:
             except StopIteration:
                 break
 
-            # extract data
             images = [example["image"] for example in batch_samples]
             instructions = [example["lang"] for example in batch_samples]
             actions = [example["action"] for example in batch_samples]
             solutions = [example["solution"] for example in batch_samples]
 
-            # model prediction
             predicted_solutions, normalized_actions = qwenpi.predict_action_withCoT(
                 images=images, instructions=instructions, use_ddim=False, num_ddim_steps=20
             )
 
-            # extract and convert predicted results
             parsed_solutions = []
             for solution in predicted_solutions:
                 parsed_solution = TrainerUtils.extract_json_from_string(solution)
                 parsed_solutions.append(parsed_solution)
 
-            # compute IoU
             for pred_dict, gt_dict in zip(parsed_solutions, solutions):
                 pred_pick_bbox = torch.tensor(pred_dict["pick"]["bbox_2d"], dtype=torch.float32).unsqueeze(0)
                 gt_pick_bbox = torch.tensor(gt_dict["pick"]["bbox_2d"], dtype=torch.float32).unsqueeze(0)
@@ -423,27 +347,19 @@ class TrainerUtils:
 
                 iou_scores.append({"pick_iou": pick_iou, "place_iou": place_iou})
 
-            # compute action distance
-            actions = np.array(actions)  # convert to numpy array
-            num_pots = np.prod(actions.shape)  # B*len*dim
+            actions = np.array(actions)
+            num_pots = np.prod(actions.shape)
             action_distance = TrainerUtils.euclidean_distance(normalized_actions, actions)
             average_action_distance = action_distance / num_pots
             action_distances.append(average_action_distance)
 
-        # summarize results
         avg_action_distance = np.mean(action_distances)
         return {"iou_scores": iou_scores, "average_action_distance": avg_action_distance}
 
     @staticmethod
     def extract_json_from_string(input_string):
         """
-        extract valid JSON part from string and convert to dictionary.
-
-        Args:
-            input_string (str): string containing extra characters.
-
-        Returns:
-            dict: dictionary extracted and parsed.
+        Extract a JSON object from a string and parse it into a dictionary.
         """
         json_match = re.search(r"{.*}", input_string, re.DOTALL)
         if json_match:
@@ -453,14 +369,11 @@ class TrainerUtils:
             except json.JSONDecodeError as e:
                 print(f"JSON decode failed: {e}")
                 return None
-        else:
-            print("No valid JSON part found")
-            return None
 
-
-import os
+        print("No valid JSON part found")
+        return None
 
 
 def is_main_process():
-    rank = int(os.environ.get("RANK", 0))  # if RANK is not set, default to 0
+    rank = int(os.environ.get("RANK", 0))
     return rank == 0
